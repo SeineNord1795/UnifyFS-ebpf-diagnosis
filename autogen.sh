@@ -4,6 +4,18 @@ echo
 echo ... UnifyFS autogen ...
 echo
 
+# --------- 关键增强：确保本地 m4/ 存在，并让 aclocal 能找到它 ---------
+# 很多 autotools 项目约定把自定义宏放在 ./m4
+# 没有这个目录时，有些环境会报 warning，甚至宏解析失败
+if [ ! -d "m4" ]; then
+  mkdir -p m4 || exit 1
+fi
+
+# 把项目的 m4/ 加进 aclocal 搜索路径（ACLOCAL_FLAGS 兼容常见做法）
+# 你也可以在外部 export ACLOCAL_FLAGS="-I m4" 来覆盖
+ACLOCAL_FLAGS="${ACLOCAL_FLAGS:--I m4}"
+# --------------------------------------------------------------------
+
 ## Check all dependencies are present
 MISSING=""
 
@@ -42,10 +54,8 @@ fi
 # Check for libtoolize or glibtoolize
 env libtoolize --version > /dev/null 2>&1
 if [ $? -eq 0 ]; then
-  # libtoolize was found, so use it
   LIBTOOLIZE=libtoolize
 else
-  # libtoolize wasn't found, so check for glibtoolize
   env glibtoolize --version > /dev/null 2>&1
   if [ $? -eq 0 ]; then
     LIBTOOLIZE=glibtoolize
@@ -86,7 +96,7 @@ else
   echo Running ${LIBTOOLIZE}...
   $LIBTOOLIZE --automake --copy --force
   echo Running ${ACLOCAL}...
-  $ACLOCAL
+  $ACLOCAL $ACLOCAL_FLAGS
   echo Running ${AUTOHEADER}...
   $AUTOHEADER
   echo Running ${AUTOCONF}...
@@ -95,7 +105,5 @@ else
   $AUTOMAKE --add-missing --force-missing --copy --foreign
 fi
 
-
-# Instruct user on next steps
 echo
 echo "Please proceed with configuring, compiling, and installing."
