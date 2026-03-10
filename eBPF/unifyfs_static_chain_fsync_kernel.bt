@@ -1,0 +1,173 @@
+#!/usr/bin/env bpftrace
+
+BEGIN
+{
+    printf("Tracing UnifyFS static write path + kernel fsync...\n");
+    printf("app: write-static | daemon: unifyfsd\n");
+    printf("Press Ctrl-C to stop.\n\n");
+}
+
+/* =========================
+ * 应用侧：write 包装入口
+ * ========================= */
+uprobe:/home/hpcuser/.local/unifyfs/unifyfs-gcc-debug/libexec/write-static:__wrap_write
+/comm == "write-static"/
+{
+    @wrap_write_ts[tid] = nsecs;
+    printf("[APP ] pid=%d tid=%d enter __wrap_write\n", pid, tid);
+}
+
+uretprobe:/home/hpcuser/.local/unifyfs/unifyfs-gcc-debug/libexec/write-static:__wrap_write
+/@wrap_write_ts[tid]/
+{
+    $delta_us = (nsecs - @wrap_write_ts[tid]) / 1000;
+    printf("[APP ] pid=%d tid=%d exit  __wrap_write latency=%llu us ret=%ld\n",
+           pid, tid, $delta_us, retval);
+    delete(@wrap_write_ts[tid]);
+}
+
+/* =========================
+ * 应用侧：UnifyFS 写入
+ * ========================= */
+uprobe:/home/hpcuser/.local/unifyfs/unifyfs-gcc-debug/libexec/write-static:unifyfs_fid_write
+/comm == "write-static"/
+{
+    @fid_write_ts[tid] = nsecs;
+    printf("[APP ] pid=%d tid=%d enter unifyfs_fid_write\n", pid, tid);
+}
+
+uretprobe:/home/hpcuser/.local/unifyfs/unifyfs-gcc-debug/libexec/write-static:unifyfs_fid_write
+/@fid_write_ts[tid]/
+{
+    $delta_us = (nsecs - @fid_write_ts[tid]) / 1000;
+    printf("[APP ] pid=%d tid=%d exit  unifyfs_fid_write latency=%llu us ret=%ld\n",
+           pid, tid, $delta_us, retval);
+    delete(@fid_write_ts[tid]);
+}
+
+/* =========================
+ * 应用侧：extent 同步
+ * ========================= */
+uprobe:/home/hpcuser/.local/unifyfs/unifyfs-gcc-debug/libexec/write-static:unifyfs_fid_sync_extents
+/comm == "write-static"/
+{
+    @sync_ext_ts[tid] = nsecs;
+    printf("[APP ] pid=%d tid=%d enter unifyfs_fid_sync_extents\n", pid, tid);
+}
+
+uretprobe:/home/hpcuser/.local/unifyfs/unifyfs-gcc-debug/libexec/write-static:unifyfs_fid_sync_extents
+/@sync_ext_ts[tid]/
+{
+    $delta_us = (nsecs - @sync_ext_ts[tid]) / 1000;
+    printf("[APP ] pid=%d tid=%d exit  unifyfs_fid_sync_extents latency=%llu us ret=%ld\n",
+           pid, tid, $delta_us, retval);
+    delete(@sync_ext_ts[tid]);
+}
+
+/* =========================
+ * 应用侧：fsync 包装层
+ * ========================= */
+uprobe:/home/hpcuser/.local/unifyfs/unifyfs-gcc-debug/libexec/write-static:__wrap_fsync
+/comm == "write-static"/
+{
+    @wrap_fsync_ts[tid] = nsecs;
+    printf("[APP ] pid=%d tid=%d enter __wrap_fsync\n", pid, tid);
+}
+
+uretprobe:/home/hpcuser/.local/unifyfs/unifyfs-gcc-debug/libexec/write-static:__wrap_fsync
+/@wrap_fsync_ts[tid]/
+{
+    $delta_us = (nsecs - @wrap_fsync_ts[tid]) / 1000;
+    printf("[APP ] pid=%d tid=%d exit  __wrap_fsync latency=%llu us ret=%ld\n",
+           pid, tid, $delta_us, retval);
+    delete(@wrap_fsync_ts[tid]);
+}
+
+/* =========================
+ * 内核侧：sys_enter_fsync / sys_exit_fsync
+ * 只看 write-static 这个进程，避免日志爆炸
+ * ========================= */
+tracepoint:syscalls:sys_enter_fsync
+/comm == "write-static"/
+{
+    @k_fsync_ts[tid] = nsecs;
+    printf("[KERN] pid=%d tid=%d enter sys_fsync fd=%d\n",
+           pid, tid, args->fd);
+}
+
+tracepoint:syscalls:sys_exit_fsync
+/@k_fsync_ts[tid]/
+{
+    $delta_us = (nsecs - @k_fsync_ts[tid]) / 1000;
+    printf("[KERN] pid=%d tid=%d exit  sys_fsync latency=%llu us ret=%d\n",
+           pid, tid, $delta_us, args->ret);
+    delete(@k_fsync_ts[tid]);
+}
+
+/* =========================
+ * daemon 侧：符号名能挂就按名字挂
+ * 如果报 symbol/address 错，再改成按地址挂
+ * ========================= */
+uprobe:/home/hpcuser/.local/unifyfs/unifyfs-gcc-debug/bin/unifyfsd:unifyfs_fsync_rpc
+/comm == "unifyfsd"/
+{
+    @daemon_fsync_rpc_ts[tid] = nsecs;
+    printf("[SVC ] pid=%d tid=%d enter unifyfs_fsync_rpc\n", pid, tid);
+}
+
+uretprobe:/home/hpcuser/.local/unifyfs/unifyfs-gcc-debug/bin/unifyfsd:unifyfs_fsync_rpc
+/@daemon_fsync_rpc_ts[tid]/
+{
+    $delta_us = (nsecs - @daemon_fsync_rpc_ts[tid]) / 1000;
+    printf("[SVC ] pid=%d tid=%d exit  unifyfs_fsync_rpc latency=%llu us ret=%ld\n",
+           pid, tid, $delta_us, retval);
+    delete(@daemon_fsync_rpc_ts[tid]);
+}
+
+uprobe:/home/hpcuser/.local/unifyfs/unifyfs-gcc-debug/bin/unifyfsd:rm_submit_client_rpc_request
+/comm == "unifyfsd"/
+{
+    @rm_submit_ts[tid] = nsecs;
+    printf("[SVC ] pid=%d tid=%d enter rm_submit_client_rpc_request\n", pid, tid);
+}
+
+uretprobe:/home/hpcuser/.local/unifyfs/unifyfs-gcc-debug/bin/unifyfsd:rm_submit_client_rpc_request
+/@rm_submit_ts[tid]/
+{
+    $delta_us = (nsecs - @rm_submit_ts[tid]) / 1000;
+    printf("[SVC ] pid=%d tid=%d exit  rm_submit_client_rpc_request latency=%llu us ret=%ld\n",
+           pid, tid, $delta_us, retval);
+    delete(@rm_submit_ts[tid]);
+}
+
+uprobe:/home/hpcuser/.local/unifyfs/unifyfs-gcc-debug/bin/unifyfsd:rpc_fsync
+/comm == "unifyfsd"/
+{
+    @rpc_fsync_ts[tid] = nsecs;
+    printf("[SVC ] pid=%d tid=%d enter rpc_fsync\n", pid, tid);
+}
+
+uretprobe:/home/hpcuser/.local/unifyfs/unifyfs-gcc-debug/bin/unifyfsd:rpc_fsync
+/@rpc_fsync_ts[tid]/
+{
+    $delta_us = (nsecs - @rpc_fsync_ts[tid]) / 1000;
+    printf("[SVC ] pid=%d tid=%d exit  rpc_fsync latency=%llu us ret=%ld\n",
+           pid, tid, $delta_us, retval);
+    delete(@rpc_fsync_ts[tid]);
+}
+
+kprobe:vfs_fsync_range
+/comm == "write-static"/
+{
+    @vfs_fsync_ts[tid] = nsecs;
+    printf("[VFS ] pid=%d tid=%d enter vfs_fsync_range\n", pid, tid);
+}
+
+kretprobe:vfs_fsync_range
+/@vfs_fsync_ts[tid]/
+{
+    $delta_us = (nsecs - @vfs_fsync_ts[tid]) / 1000;
+    printf("[VFS ] pid=%d tid=%d exit  vfs_fsync_range latency=%llu us ret=%d\n",
+           pid, tid, $delta_us, retval);
+    delete(@vfs_fsync_ts[tid]);
+}
